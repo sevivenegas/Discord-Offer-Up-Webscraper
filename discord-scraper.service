@@ -1,0 +1,23 @@
+[Unit]
+Description=Discord OfferUp Scraper Bot
+# Wait for network to be up before starting — important on Pi boot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+# Change this to wherever you clone the repo on the Pi
+WorkingDirectory=/home/pi/Discord-Offer-Up-Webscraper
+# Runs the published binary directly (faster than dotnet run)
+ExecStart=/home/pi/Discord-Offer-Up-Webscraper/publish/DiscordOfferUpScraper
+# Auto-restart if the bot crashes, wait 10s before trying again
+Restart=always
+RestartSec=10
+# Pipe all Console.WriteLine output to journald so you can read it with: journalctl -u discord-scraper -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Start automatically on boot
+WantedBy=multi-user.target

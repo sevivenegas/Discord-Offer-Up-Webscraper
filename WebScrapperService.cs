@@ -2,7 +2,8 @@
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 
-// WebScraperService is a service class for scraping data from OfferUp, processing the data, and saving it into a SQLite database.
+// WebScraperService scrapes OfferUp search results using a headless Chromium browser, processes listing data,
+// and saves full price snapshots (average, median, min, max, std deviation) into a SQLite database.
 class WebScraperService
 {
     // Performs a scrape of Offer Up to collect item listings, calculate statistics, and insert data into the database
@@ -33,14 +34,15 @@ class WebScraperService
         {
             var title = await item.GetAttributeAsync("title");
             var aria = await item.GetAttributeAsync("aria-label");
-            var url = await item.GetAttributeAsync("href");
+            var href = await item.GetAttributeAsync("href");
 
             decimal priceValue = ExtractPrice(aria);
 
+            // store full offerup URL from the start to keep things consistent
             if (priceValue > 1)
             {
                 prices.Add(priceValue);
-                allListings.Add((title, priceValue, url));
+                allListings.Add((title, priceValue, "https://offerup.com" + href));
             }
         }
 
@@ -57,21 +59,30 @@ class WebScraperService
         decimal upperLimit = Q3 + 1.5m * IQR;
         decimal lowerLimit = Q1 - 1.5m * IQR;
 
+        // Wipe old listings and deals for this item before inserting fresh data
+        ClearStaleData(_connection, searchTerm);
+
         // Filter out listings with prices within the IQR and insert valid listings into the database
         foreach (var (title, price, url) in allListings)
         {
             if (price >= lowerLimit && price <= upperLimit)
             {
                 InsertListing(_connection, searchTerm, title, price, url);
-                validListings.Add((title, price, "https://offerup.com" + url));
+                validListings.Add((title, price, url));
             }
         }
 
-        // Calculate the market average price with valid listings and insert it into the database
+        // Calculate full market stats with valid listings and insert snapshot into database
         if (validListings.Count > 0)
         {
-            decimal marketAverage = validListings.Average(listing => listing.price);
-            InsertAveragePrice(_connection, searchTerm, marketAverage);
+            var validPrices = validListings.Select(l => l.price).ToList();
+            decimal marketAverage = validPrices.Average();
+            decimal medianPrice = CalculateMedian(validPrices);
+            decimal minPrice = validPrices.Min();
+            decimal maxPrice = validPrices.Max();
+            decimal stdDev = CalculateStdDev(validPrices, marketAverage);
+
+            InsertAveragePrice(_connection, searchTerm, marketAverage, medianPrice, minPrice, maxPrice, stdDev, validListings.Count);
         }
 
         // Insert the best deals into database (lowest 5 outliers and top 5 within the IQR)
@@ -114,10 +125,41 @@ class WebScraperService
         return 0;
     }
 
+    // Calculates median from a sorted list of prices
+    private static decimal CalculateMedian(List<decimal> prices)
+    {
+        var sorted = prices.OrderBy(p => p).ToList();
+        int mid = sorted.Count / 2;
+        // even count takes average of the two middle values
+        return sorted.Count % 2 == 0 ? (sorted[mid - 1] + sorted[mid]) / 2m : sorted[mid];
+    }
+
+    // Calculates population standard deviation for a list of prices given the mean
+    private static decimal CalculateStdDev(List<decimal> prices, decimal mean)
+    {
+        if (prices.Count < 2) return 0;
+        decimal sumOfSquares = prices.Sum(p => (p - mean) * (p - mean));
+        return (decimal)Math.Sqrt((double)(sumOfSquares / prices.Count));
+    }
+
+    // Clears stale listings and deals for an item before a fresh scrape so we dont pile up old data
+    private static void ClearStaleData(SqliteConnection connection, string itemName)
+    {
+        var clearListings = connection.CreateCommand();
+        clearListings.CommandText = "DELETE FROM Listings WHERE ItemName = $itemName;";
+        clearListings.Parameters.AddWithValue("$itemName", itemName);
+        clearListings.ExecuteNonQuery();
+
+        var clearDeals = connection.CreateCommand();
+        clearDeals.CommandText = "DELETE FROM BestDeals WHERE ItemName = $itemName;";
+        clearDeals.Parameters.AddWithValue("$itemName", itemName);
+        clearDeals.ExecuteNonQuery();
+    }
+
     // Insert a valid listing into database using its defining information (itemname, listing title, price and url)
     private static void InsertListing(SqliteConnection connection, string itemName, string title, decimal price, string url)
     {
-        // Command to insert listing into the the Listings table
+        // Command to insert listing into the Listings table
         var insertCmd = connection.CreateCommand();
         insertCmd.CommandText = @"
             INSERT INTO Listings (ItemName, Title, Price, Url, ScrapedAt)
@@ -131,17 +173,23 @@ class WebScraperService
         insertCmd.ExecuteNonQuery();
     }
 
-    // Insert average price for an item into database
-    private static void InsertAveragePrice(SqliteConnection connection, string itemName, decimal averagePrice)
+    // Insert full stats snapshot for an item into the AveragePriceHistory table
+    private static void InsertAveragePrice(SqliteConnection connection, string itemName, decimal averagePrice,
+        decimal medianPrice, decimal minPrice, decimal maxPrice, decimal stdDev, int listingCount)
     {
-        // Command to insert current average price into the AveragePriceHistory table
+        // Command to insert current price snapshot into the AveragePriceHistory table
         var averageCmd = connection.CreateCommand();
         averageCmd.CommandText = @"
-            INSERT INTO AveragePriceHistory (ItemName, AveragePrice, DateCalculated)
-            VALUES ($itemName, $averagePrice, $dateCalculated);
+            INSERT INTO AveragePriceHistory (ItemName, AveragePrice, MedianPrice, MinPrice, MaxPrice, StdDev, ListingCount, DateCalculated)
+            VALUES ($itemName, $averagePrice, $medianPrice, $minPrice, $maxPrice, $stdDev, $listingCount, $dateCalculated);
         ";
         averageCmd.Parameters.AddWithValue("$itemName", itemName);
         averageCmd.Parameters.AddWithValue("$averagePrice", averagePrice);
+        averageCmd.Parameters.AddWithValue("$medianPrice", medianPrice);
+        averageCmd.Parameters.AddWithValue("$minPrice", minPrice);
+        averageCmd.Parameters.AddWithValue("$maxPrice", maxPrice);
+        averageCmd.Parameters.AddWithValue("$stdDev", stdDev);
+        averageCmd.Parameters.AddWithValue("$listingCount", listingCount);
         averageCmd.Parameters.AddWithValue("$dateCalculated", DateTime.UtcNow.ToString("s"));
         averageCmd.ExecuteNonQuery();
     }

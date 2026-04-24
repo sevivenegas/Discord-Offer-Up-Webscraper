@@ -1,0 +1,19 @@
+# Build output
+bin/
+obj/
+
+# Database — lives locally on whatever machine is running the bot
+*.db
+*.db-shm
+*.db-wal
+
+# secrets.json holds the bot token, never commit this
+secrets.json
+
+# macOS noise
+.DS_Store
+
+# Rider / VS / VS Code
+.idea/
+.vscode/
+*.user

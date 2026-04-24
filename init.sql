@@ -18,8 +18,13 @@ CREATE TABLE IF NOT EXISTS BestDeals (
 
 CREATE TABLE IF NOT EXISTS AveragePriceHistory (
   Id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ItemName TEXT NOT NULL,    
+  ItemName TEXT NOT NULL,
   AveragePrice DECIMAL(10, 2) NOT NULL,
+  MedianPrice DECIMAL(10, 2),
+  MinPrice DECIMAL(10, 2),
+  MaxPrice DECIMAL(10, 2),
+  StdDev DECIMAL(10, 2),
+  ListingCount INTEGER,
   DateCalculated TEXT NOT NULL
 );
 
@@ -28,4 +33,11 @@ CREATE TABLE IF NOT EXISTS TrackedItems (
   ItemName TEXT NOT NULL,
   GuildId TEXT NOT NULL,
   AddedAt TEXT NOT NULL
+);
+
+-- stores per-guild settings like the notification channel for daily scans
+CREATE TABLE IF NOT EXISTS GuildSettings (
+  GuildId TEXT PRIMARY KEY,
+  NotificationChannelId TEXT,
+  DailyScanEnabled INTEGER NOT NULL DEFAULT 1
 );
